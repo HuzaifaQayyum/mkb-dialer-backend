@@ -1,36 +1,6 @@
-# MKB Dialer — Backend API
-> Laravel 11 REST API with Laravel Reverb (WebSocket) for real-time agent presence. Includes Asterisk PBX integration for live SIP trunk management via Docker.
+# mkb-dialer-backend
 
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Framework | Laravel 11 |
-| Real-time | Laravel Reverb (WebSocket server) |
-| Auth | Laravel Sanctum (token-based) |
-| Database | SQLite (dev) / MySQL or PostgreSQL (prod) |
-| Queue | Database queue driver |
-| Telephony | Asterisk 20 (PJSIP) running in Docker |
-| PHP | 8.2+ |
-
----
-
-## Architecture Overview
-
-```
-Frontend (React) ──HTTP──► Laravel API ──writes──► pjsip.conf
-                                │                        │
-                          WebSocket (Reverb)       docker exec asterisk
-                                │                   pjsip reload
-                           Agent browsers
-```
-
-When SIP credentials are updated through the UI, the Laravel backend:
-1. Saves the credentials to `storage/app/sip_settings.json`
-2. Dynamically rewrites the Asterisk `pjsip.conf` file
-3. Hot-reloads Asterisk via `docker exec asterisk asterisk -rx "pjsip reload"` (zero downtime)
+Laravel 11 API backend with Laravel Reverb (WebSocket) and Asterisk PBX integration via Docker.
 
 ---
 
@@ -38,270 +8,134 @@ When SIP credentials are updated through the UI, the Laravel backend:
 
 - PHP 8.2+
 - Composer 2+
-- Docker & Docker Compose (for Asterisk PBX)
-- SQLite (built into PHP) **or** MySQL/PostgreSQL for production
-- Node.js 18+ (for Vite asset compilation)
+- Docker (for Asterisk)
+- Node.js 18+ or Bun
 
 ---
 
-## 1. Asterisk Setup (Docker)
+## 1. Start Asterisk (Docker)
 
-Asterisk must be running before starting the Laravel backend.
-
-### Start Asterisk container
+Asterisk must be running first. The backend writes SIP config directly into the mounted volume.
 
 ```bash
 docker run -d \
   --name asterisk \
   --network host \
-  -v /Users/huzaifa/Documents/projects/asterisk-config:/etc/asterisk \
+  -v /absolute/path/to/mkb-dialer-backend/asterisk-config:/etc/asterisk \
   andrius/asterisk:latest
 ```
 
-> **Note:** The `-v` volume mount points to the `asterisk-config/` folder inside this repository. Laravel writes updated `pjsip.conf` to that path and then hot-reloads Asterisk.
+> Replace `/absolute/path/to/mkb-dialer-backend/asterisk-config` with the real path on your machine.
 
-### Verify Asterisk is running
+Verify it's running:
 
 ```bash
-docker exec asterisk asterisk -rx "pjsip show endpoints"
-```
-
-### Asterisk config files
-
-The `asterisk-config/` directory contains:
-
-| File | Purpose |
-|---|---|
-| `pjsip.conf` | SIP endpoints, trunks (Twilio, Telnyx, custom), transports |
-| `extensions.conf` | Dialplan — inbound/outbound call routing |
-| `ari.conf` | ARI (Asterisk REST Interface) credentials |
-| `http.conf` | HTTP/WebSocket server config for WebRTC |
-| `rtp.conf` | RTP port range for media |
-
-### Agent SIP extension (default)
-
-```ini
-; Extension 1000 — agent softphone / WebRTC
-username: 1000
-password: agent_pass
+docker exec asterisk asterisk -rx "core show version"
 ```
 
 ---
 
-## 2. Laravel Backend Setup
-
-### Clone the repository
-
-```bash
-git clone https://github.com/HuzaifaQayyum/mkb-dialer-backend.git
-cd mkb-dialer-backend
-```
-
-### Install dependencies
+## 2. Install Dependencies
 
 ```bash
 composer install
 npm install
 ```
 
-### Configure environment
+---
+
+## 3. Configure Environment
 
 ```bash
 cp .env.example .env
 php artisan key:generate
 ```
 
-Edit `.env`:
+Open `.env` and set the following:
 
 ```env
 APP_NAME="MKB Dialer"
 APP_ENV=local
 APP_URL=http://localhost:8000
 
-# Database
+# Database (SQLite — zero config, works out of the box)
 DB_CONNECTION=sqlite
 
-# WebSocket — Laravel Reverb
+# WebSocket — must be "reverb" for real-time features
 BROADCAST_CONNECTION=reverb
 REVERB_APP_ID=mkb-dialer
-REVERB_APP_KEY=your-reverb-app-key
-REVERB_APP_SECRET=your-reverb-app-secret
+REVERB_APP_KEY=mkb-dialer-key
+REVERB_APP_SECRET=mkb-dialer-secret
 REVERB_HOST=127.0.0.1
 REVERB_PORT=8080
 REVERB_SCHEME=http
 
 # Queue
 QUEUE_CONNECTION=database
-
-# SIP Provider defaults (overridden by UI settings)
-SIP_PROVIDER_DOMAIN=sip.mkbdialer.com
-SIP_PROVIDER_PORT=5060
-SIP_PROVIDER_USERNAME=trunk_main
 ```
 
-### Run database migrations
+---
+
+## 4. Run Migrations
 
 ```bash
 php artisan migrate
 ```
 
-### Start all services
+---
 
-Run these **three terminal windows** simultaneously:
+## 5. Start the Servers
 
-**Terminal 1 — Laravel API server:**
+You need **three terminals** running at the same time:
+
 ```bash
+# Terminal 1 — API server (http://localhost:8000)
 php artisan serve
-# http://localhost:8000
-```
 
-**Terminal 2 — Reverb WebSocket server:**
-```bash
+# Terminal 2 — WebSocket server (ws://localhost:8080)
 php artisan reverb:start --debug
-# ws://localhost:8080
-```
 
-**Terminal 3 — Queue worker:**
-```bash
+# Terminal 3 — Queue worker
 php artisan queue:work
 ```
 
----
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/agents` | List all agents |
-| POST | `/api/agents` | Create a new agent |
-| PUT | `/api/agents/{id}/status` | Update agent status |
-| PUT | `/api/agents/{id}/heartbeat` | Agent heartbeat ping |
-| PUT | `/api/agents/{id}/queue-eligibility` | Toggle queue eligibility |
-| DELETE | `/api/agents/{id}` | Remove an agent |
-| GET | `/api/contacts` | List all contacts |
-| POST | `/api/contacts` | Create a contact |
-| DELETE | `/api/contacts/{id}` | Delete a contact |
-| GET | `/api/campaigns` | List all campaigns |
-| POST | `/api/campaigns` | Create a campaign |
-| GET | `/api/sip` | Get current SIP credentials |
-| PUT | `/api/sip` | Update SIP credentials (rewrites pjsip.conf + reloads Asterisk) |
-| GET | `/api/companies` | List companies |
-| POST | `/api/companies` | Create a company |
-| POST | `/api/invitations` | Send a team invitation |
-| POST | `/api/invitations/accept` | Accept an invitation |
+The API is now live at `http://localhost:8000`.
 
 ---
 
-## SIP / Trunk Configuration
+## 6. Asterisk / SIP Config
 
-The `/api/sip` endpoint manages the live Asterisk trunk. Supported providers in `pjsip.conf`:
+The `asterisk-config/` directory contains the live Asterisk configuration files:
 
-| Provider | SIP Contact |
+| File | Purpose |
 |---|---|
-| **Twilio** | `sip:your-domain.pstn.twilio.com:5060` |
-| **Telnyx** | `sip:sip.telnyx.com:5060` |
-| **Generic / Custom** | Configurable via the Settings UI |
+| `pjsip.conf` | SIP endpoints, trunks (Twilio, Telnyx, custom), agent extensions |
+| `extensions.conf` | Dialplan — call routing rules |
+| `ari.conf` | Asterisk REST Interface credentials |
+| `http.conf` | HTTP/WebSocket server for WebRTC |
+| `rtp.conf` | RTP port range for media |
 
-To update credentials:
-```bash
-curl -X PUT http://localhost:8000/api/sip \
-  -H "Content-Type: application/json" \
-  -d '{"sip_domain":"sip.telnyx.com","sip_port":5060,"username":"your_user","password":"your_pass"}'
+When SIP credentials are saved via the Settings UI, the backend automatically:
+1. Rewrites `asterisk-config/pjsip.conf`
+2. Runs `docker exec asterisk asterisk -rx "pjsip reload"` — no restart needed
+
+Default agent SIP extension (for softphones):
 ```
-
-This writes `pjsip.conf` and immediately runs:
-```bash
-docker exec asterisk asterisk -rx "pjsip reload"
+Extension: 1000
+Password:  agent_pass
 ```
 
 ---
 
-## Production Deployment
-
-### 1. Set production environment
-
-```env
-APP_ENV=production
-APP_DEBUG=false
-APP_URL=https://api.your-domain.com
-DB_CONNECTION=mysql
-DB_HOST=127.0.0.1
-DB_DATABASE=mkb_dialer
-DB_USERNAME=your_db_user
-DB_PASSWORD=your_db_password
-```
-
-### 2. Optimize Laravel
+## Production
 
 ```bash
+# Optimize Laravel
 composer install --no-dev --optimize-autoloader
 php artisan config:cache
 php artisan route:cache
-php artisan view:cache
 php artisan migrate --force
+
+# Use Supervisor to keep queue worker and Reverb running persistently
+# (see /etc/supervisor/conf.d/ for config)
 ```
-
-### 3. Supervise processes (Supervisor)
-
-```ini
-[program:mkb-queue]
-command=php /var/www/mkb-dialer-backend/artisan queue:work --tries=3
-autostart=true
-autorestart=true
-numprocs=2
-stdout_logfile=/var/log/mkb-queue.log
-
-[program:mkb-reverb]
-command=php /var/www/mkb-dialer-backend/artisan reverb:start
-autostart=true
-autorestart=true
-stdout_logfile=/var/log/mkb-reverb.log
-```
-
-```bash
-supervisorctl reread && supervisorctl update && supervisorctl start all
-```
-
-### 4. Nginx config
-
-```nginx
-server {
-    listen 80;
-    server_name api.your-domain.com;
-    root /var/www/mkb-dialer-backend/public;
-
-    index index.php;
-
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
-    }
-
-    location ~ \.php$ {
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
-        include fastcgi_params;
-    }
-}
-```
-
----
-
-## Environment Variables Reference
-
-| Variable | Description | Default |
-|---|---|---|
-| `APP_KEY` | Laravel encryption key | auto-generated |
-| `DB_CONNECTION` | Database driver | `sqlite` |
-| `BROADCAST_CONNECTION` | Must be `reverb` for WebSocket | `log` |
-| `REVERB_APP_KEY` | Reverb auth key | — |
-| `REVERB_APP_SECRET` | Reverb secret | — |
-| `REVERB_PORT` | WebSocket port | `8080` |
-| `QUEUE_CONNECTION` | Queue driver | `database` |
-| `SIP_PROVIDER_DOMAIN` | Default SIP domain | `sip.mkbdialer.com` |
-| `SIP_PROVIDER_PORT` | Default SIP port | `5060` |
-
----
-
-## License
-
-MIT
