@@ -1,59 +1,307 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# MKB Dialer — Backend API
+> Laravel 11 REST API with Laravel Reverb (WebSocket) for real-time agent presence. Includes Asterisk PBX integration for live SIP trunk management via Docker.
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+---
 
-## About Laravel
+## Tech Stack
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+| Layer | Technology |
+|---|---|
+| Framework | Laravel 11 |
+| Real-time | Laravel Reverb (WebSocket server) |
+| Auth | Laravel Sanctum (token-based) |
+| Database | SQLite (dev) / MySQL or PostgreSQL (prod) |
+| Queue | Database queue driver |
+| Telephony | Asterisk 20 (PJSIP) running in Docker |
+| PHP | 8.2+ |
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+---
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Architecture Overview
 
-## Learning Laravel
+```
+Frontend (React) ──HTTP──► Laravel API ──writes──► pjsip.conf
+                                │                        │
+                          WebSocket (Reverb)       docker exec asterisk
+                                │                   pjsip reload
+                           Agent browsers
+```
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+When SIP credentials are updated through the UI, the Laravel backend:
+1. Saves the credentials to `storage/app/sip_settings.json`
+2. Dynamically rewrites the Asterisk `pjsip.conf` file
+3. Hot-reloads Asterisk via `docker exec asterisk asterisk -rx "pjsip reload"` (zero downtime)
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+---
 
-## Laravel Sponsors
+## Prerequisites
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+- PHP 8.2+
+- Composer 2+
+- Docker & Docker Compose (for Asterisk PBX)
+- SQLite (built into PHP) **or** MySQL/PostgreSQL for production
+- Node.js 18+ (for Vite asset compilation)
 
-### Premium Partners
+---
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+## 1. Asterisk Setup (Docker)
 
-## Contributing
+Asterisk must be running before starting the Laravel backend.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+### Start Asterisk container
 
-## Code of Conduct
+```bash
+docker run -d \
+  --name asterisk \
+  --network host \
+  -v /Users/huzaifa/Documents/projects/asterisk-config:/etc/asterisk \
+  andrius/asterisk:latest
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+> **Note:** The `-v` volume mount points to the `asterisk-config/` folder inside this repository. Laravel writes updated `pjsip.conf` to that path and then hot-reloads Asterisk.
 
-## Security Vulnerabilities
+### Verify Asterisk is running
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+```bash
+docker exec asterisk asterisk -rx "pjsip show endpoints"
+```
+
+### Asterisk config files
+
+The `asterisk-config/` directory contains:
+
+| File | Purpose |
+|---|---|
+| `pjsip.conf` | SIP endpoints, trunks (Twilio, Telnyx, custom), transports |
+| `extensions.conf` | Dialplan — inbound/outbound call routing |
+| `ari.conf` | ARI (Asterisk REST Interface) credentials |
+| `http.conf` | HTTP/WebSocket server config for WebRTC |
+| `rtp.conf` | RTP port range for media |
+
+### Agent SIP extension (default)
+
+```ini
+; Extension 1000 — agent softphone / WebRTC
+username: 1000
+password: agent_pass
+```
+
+---
+
+## 2. Laravel Backend Setup
+
+### Clone the repository
+
+```bash
+git clone https://github.com/HuzaifaQayyum/mkb-dialer-backend.git
+cd mkb-dialer-backend
+```
+
+### Install dependencies
+
+```bash
+composer install
+npm install
+```
+
+### Configure environment
+
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+Edit `.env`:
+
+```env
+APP_NAME="MKB Dialer"
+APP_ENV=local
+APP_URL=http://localhost:8000
+
+# Database
+DB_CONNECTION=sqlite
+
+# WebSocket — Laravel Reverb
+BROADCAST_CONNECTION=reverb
+REVERB_APP_ID=mkb-dialer
+REVERB_APP_KEY=your-reverb-app-key
+REVERB_APP_SECRET=your-reverb-app-secret
+REVERB_HOST=127.0.0.1
+REVERB_PORT=8080
+REVERB_SCHEME=http
+
+# Queue
+QUEUE_CONNECTION=database
+
+# SIP Provider defaults (overridden by UI settings)
+SIP_PROVIDER_DOMAIN=sip.mkbdialer.com
+SIP_PROVIDER_PORT=5060
+SIP_PROVIDER_USERNAME=trunk_main
+```
+
+### Run database migrations
+
+```bash
+php artisan migrate
+```
+
+### Start all services
+
+Run these **three terminal windows** simultaneously:
+
+**Terminal 1 — Laravel API server:**
+```bash
+php artisan serve
+# http://localhost:8000
+```
+
+**Terminal 2 — Reverb WebSocket server:**
+```bash
+php artisan reverb:start --debug
+# ws://localhost:8080
+```
+
+**Terminal 3 — Queue worker:**
+```bash
+php artisan queue:work
+```
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/agents` | List all agents |
+| POST | `/api/agents` | Create a new agent |
+| PUT | `/api/agents/{id}/status` | Update agent status |
+| PUT | `/api/agents/{id}/heartbeat` | Agent heartbeat ping |
+| PUT | `/api/agents/{id}/queue-eligibility` | Toggle queue eligibility |
+| DELETE | `/api/agents/{id}` | Remove an agent |
+| GET | `/api/contacts` | List all contacts |
+| POST | `/api/contacts` | Create a contact |
+| DELETE | `/api/contacts/{id}` | Delete a contact |
+| GET | `/api/campaigns` | List all campaigns |
+| POST | `/api/campaigns` | Create a campaign |
+| GET | `/api/sip` | Get current SIP credentials |
+| PUT | `/api/sip` | Update SIP credentials (rewrites pjsip.conf + reloads Asterisk) |
+| GET | `/api/companies` | List companies |
+| POST | `/api/companies` | Create a company |
+| POST | `/api/invitations` | Send a team invitation |
+| POST | `/api/invitations/accept` | Accept an invitation |
+
+---
+
+## SIP / Trunk Configuration
+
+The `/api/sip` endpoint manages the live Asterisk trunk. Supported providers in `pjsip.conf`:
+
+| Provider | SIP Contact |
+|---|---|
+| **Twilio** | `sip:your-domain.pstn.twilio.com:5060` |
+| **Telnyx** | `sip:sip.telnyx.com:5060` |
+| **Generic / Custom** | Configurable via the Settings UI |
+
+To update credentials:
+```bash
+curl -X PUT http://localhost:8000/api/sip \
+  -H "Content-Type: application/json" \
+  -d '{"sip_domain":"sip.telnyx.com","sip_port":5060,"username":"your_user","password":"your_pass"}'
+```
+
+This writes `pjsip.conf` and immediately runs:
+```bash
+docker exec asterisk asterisk -rx "pjsip reload"
+```
+
+---
+
+## Production Deployment
+
+### 1. Set production environment
+
+```env
+APP_ENV=production
+APP_DEBUG=false
+APP_URL=https://api.your-domain.com
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_DATABASE=mkb_dialer
+DB_USERNAME=your_db_user
+DB_PASSWORD=your_db_password
+```
+
+### 2. Optimize Laravel
+
+```bash
+composer install --no-dev --optimize-autoloader
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan migrate --force
+```
+
+### 3. Supervise processes (Supervisor)
+
+```ini
+[program:mkb-queue]
+command=php /var/www/mkb-dialer-backend/artisan queue:work --tries=3
+autostart=true
+autorestart=true
+numprocs=2
+stdout_logfile=/var/log/mkb-queue.log
+
+[program:mkb-reverb]
+command=php /var/www/mkb-dialer-backend/artisan reverb:start
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/mkb-reverb.log
+```
+
+```bash
+supervisorctl reread && supervisorctl update && supervisorctl start all
+```
+
+### 4. Nginx config
+
+```nginx
+server {
+    listen 80;
+    server_name api.your-domain.com;
+    root /var/www/mkb-dialer-backend/public;
+
+    index index.php;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+}
+```
+
+---
+
+## Environment Variables Reference
+
+| Variable | Description | Default |
+|---|---|---|
+| `APP_KEY` | Laravel encryption key | auto-generated |
+| `DB_CONNECTION` | Database driver | `sqlite` |
+| `BROADCAST_CONNECTION` | Must be `reverb` for WebSocket | `log` |
+| `REVERB_APP_KEY` | Reverb auth key | — |
+| `REVERB_APP_SECRET` | Reverb secret | — |
+| `REVERB_PORT` | WebSocket port | `8080` |
+| `QUEUE_CONNECTION` | Queue driver | `database` |
+| `SIP_PROVIDER_DOMAIN` | Default SIP domain | `sip.mkbdialer.com` |
+| `SIP_PROVIDER_PORT` | Default SIP port | `5060` |
+
+---
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+MIT
