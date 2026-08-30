@@ -35,4 +35,33 @@ return [
         ],
     ],
 
+    'asterisk' => [
+        'url' => env('ASTERISK_ARI_URL', 'http://127.0.0.1:8088'),
+        'user' => env('ASTERISK_ARI_USER', 'mkb_user'),
+        'password' => env('ASTERISK_ARI_PASSWORD', 'mkb_pass'),
+        'app' => env('ASTERISK_STASIS_APP', 'mkb-dialer'),
+        'trunk' => env('ASTERISK_TRUNK', 'telnyx-trunk'),
+        'sip_domain' => env('TELNYX_SIP_DOMAIN', 'sip.telnyx.com'),
+
+        // Browser softphone (WebRTC) registration details.
+        'ws_url' => env('ASTERISK_WS_URL', 'ws://127.0.0.1:8088/ws'),
+        'sip_realm' => env('ASTERISK_SIP_REALM', 'mkb-dialer'),
+        // Agent SIP passwords follow a fixed pattern in pjsip.conf:
+        // agent<extension>pass. Change both together.
+        'agent_password_prefix' => env('ASTERISK_AGENT_PW_PREFIX', 'agent'),
+        'agent_password_suffix' => env('ASTERISK_AGENT_PW_SUFFIX', 'pass'),
+    ],
+
+    'dialer' => [
+        // Account-specific: set DIALER_CALLER_ID in .env to a number on your
+        // carrier account. Telnyx rejects calls whose From user it doesn't own.
+        'caller_id' => env('DIALER_CALLER_ID'),
+        // Hard ceiling the pacer will never exceed, whatever a session asks for.
+        'max_concurrency' => (int) env('DIALER_MAX_CONCURRENCY', 10),
+        // Seconds to ring a lead before giving up.
+        'lead_timeout' => (int) env('DIALER_LEAD_TIMEOUT', 30),
+        // Don't re-dial the same contact within this many hours.
+        'redial_cooldown_hours' => (int) env('DIALER_REDIAL_COOLDOWN_HOURS', 24),
+    ],
+
 ];
