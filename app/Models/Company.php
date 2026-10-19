@@ -9,13 +9,23 @@ class Company extends Model
     protected $fillable = [
         'name',
         'slug',
+        'three_way_slots',
+    ];
+
+    protected $casts = [
+        'three_way_slots' => 'array',
     ];
 
     public function users()
     {
         return $this->belongsToMany(User::class, 'company_user')
-                    ->withPivot('role', 'status', 'queue_eligible')
+                    ->withPivot('role', 'status', 'queue_eligible', 'sip_extension', 'active_campaign_id')
                     ->withTimestamps();
+    }
+
+    public function campaigns()
+    {
+        return $this->hasMany(Campaign::class);
     }
 
     public function contacts()

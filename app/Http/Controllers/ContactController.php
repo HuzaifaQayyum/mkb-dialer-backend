@@ -7,9 +7,17 @@ use App\Models\Contact;
 
 class ContactController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        return response()->json(Contact::orderBy('created_at', 'desc')->get());
+        // Campaign-owned leads are walled off from the company-wide list: a
+        // CSV imported into a campaign must not spill into everyone's contacts.
+        // Pass ?include_campaign_leads=1 to see them anyway (admin views).
+        $contacts = Contact::query()
+            ->unless($request->boolean('include_campaign_leads'), fn ($q) => $q->whereNull('campaign_id'))
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        return response()->json($contacts->map->toLeadPayload());
     }
 
     public function store(Request $request)
@@ -81,6 +89,33 @@ class ContactController extends Controller
         ]);
 
         return response()->json($contact, 201);
+    }
+
+    public function update(Request $request, $id)
+    {
+        $contact = Contact::find($id);
+        if (! $contact) {
+            return response()->json(['message' => 'Contact not found.'], 404);
+        }
+
+        $validated = $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'phone' => 'sometimes|string|max:50',
+            'email' => 'sometimes|nullable|email|max:255',
+            'company_name' => 'sometimes|nullable|string|max:255',
+            'address' => 'sometimes|nullable|string|max:255',
+            'city' => 'sometimes|nullable|string|max:255',
+            'state' => 'sometimes|nullable|string|max:255',
+            'notes' => 'sometimes|nullable|string|max:5000',
+            'stage' => 'sometimes|nullable|string|max:64',
+            'value' => 'sometimes|nullable|numeric|min:0',
+            'callback_date' => 'sometimes|nullable|date',
+            'tags' => 'sometimes|nullable|array',
+        ]);
+
+        $contact->update($validated);
+
+        return response()->json($contact->fresh()->toLeadPayload());
     }
 
     public function destroy($id)

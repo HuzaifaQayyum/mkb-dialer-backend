@@ -50,17 +50,26 @@ class AsteriskAri
      * Returns the Asterisk channel id, or null when the originate is
      * refused outright (trunk down, bad number, ARI unreachable).
      */
-    public function originateLead(string $e164, string $callerId, array $vars = [], int $timeout = 30): ?string
-    {
+    public function originateLead(
+        string $e164,
+        string $callerId,
+        array $vars = [],
+        int $timeout = 30,
+        string $role = 'lead',
+    ): ?string {
         $trunk  = config('services.asterisk.trunk');
         $domain = config('services.asterisk.sip_domain');
-        $endpoint = "PJSIP/{$trunk}/sip:{$e164}@{$domain}";
+        $endpoint = str_contains($e164, '/')
+            ? $e164
+            : "PJSIP/{$trunk}/sip:{$e164}@{$domain}";
 
         try {
             $res = $this->request()->post("{$this->base}/ari/channels", [
                 'endpoint' => $endpoint,
                 'app' => $this->app,
-                'appArgs' => 'lead',
+                // Tells core what to do with the channel when it answers:
+                // bridge it as the lead, or join an existing bridge.
+                'appArgs' => $role,
                 'callerId' => $callerId,
                 'timeout' => $timeout,
                 'variables' => $vars,
@@ -83,13 +92,22 @@ class AsteriskAri
     }
 
     /** Ring an agent's registered softphone into Stasis so it can be bridged. */
-    public function originateAgent(string $extension, string $callerId, array $vars = [], int $timeout = 25): ?string
-    {
+    public function originateAgent(
+        string $extension,
+        string $callerId,
+        array $vars = [],
+        int $timeout = 25,
+        string $role = 'agent',
+    ): ?string {
+        // A bare extension is a registered phone; anything containing "/" is
+        // passed through verbatim, which is how a remote agent on a mobile works.
+        $endpoint = str_contains($extension, '/') ? $extension : "PJSIP/{$extension}";
+
         try {
             $res = $this->request()->post("{$this->base}/ari/channels", [
-                'endpoint' => "PJSIP/{$extension}",
+                'endpoint' => $endpoint,
                 'app' => $this->app,
-                'appArgs' => 'agent',
+                'appArgs' => $role,
                 'callerId' => $callerId,
                 'timeout' => $timeout,
                 'variables' => $vars,

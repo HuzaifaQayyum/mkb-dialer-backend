@@ -42,6 +42,8 @@ return [
         'app' => env('ASTERISK_STASIS_APP', 'mkb-dialer'),
         'trunk' => env('ASTERISK_TRUNK', 'telnyx-trunk'),
         'sip_domain' => env('TELNYX_SIP_DOMAIN', 'sip.telnyx.com'),
+        // Host side of the volume Asterisk writes recordings into.
+        'recording_path' => env('ASTERISK_RECORDING_PATH', base_path('../asterisk-recordings')),
 
         // Browser softphone (WebRTC) registration details.
         'ws_url' => env('ASTERISK_WS_URL', 'ws://127.0.0.1:8088/ws'),
@@ -56,6 +58,10 @@ return [
         // Account-specific: set DIALER_CALLER_ID in .env to a number on your
         // carrier account. Telnyx rejects calls whose From user it doesn't own.
         'caller_id' => env('DIALER_CALLER_ID'),
+        // Country code used to resolve national-format numbers (leading 0, or
+        // bare local numbers). Leave empty to refuse them rather than guess —
+        // a wrong guess dials a real stranger.
+        'default_country_code' => env('DIALER_DEFAULT_COUNTRY_CODE', ''),
         // Hard ceiling the pacer will never exceed, whatever a session asks for.
         'max_concurrency' => (int) env('DIALER_MAX_CONCURRENCY', 10),
         // Seconds to ring a lead before giving up.

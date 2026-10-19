@@ -163,6 +163,49 @@ class AgentController extends Controller
         ]);
     }
 
+    public function updateActiveCampaign(Request $request, $id)
+    {
+        if (!is_numeric($id)) {
+            return response()->json(['error' => 'Invalid user ID format'], 400);
+        }
+
+        $company = $this->getActiveCompany();
+        if (!$company) {
+            return response()->json(['error' => 'No active company found'], 400);
+        }
+
+        $validated = $request->validate([
+            'campaignId' => 'present|nullable|integer',
+        ]);
+
+        $campaignId = $validated['campaignId'] ?? null;
+
+        if ($campaignId) {
+            $campaign = \App\Models\Campaign::where('company_id', $company->id)->find($campaignId);
+            if (!$campaign) {
+                return response()->json(['message' => 'Campaign not found for this company.'], 404);
+            }
+            if (!$campaign->agents()->where('users.id', $id)->exists()) {
+                return response()->json(['message' => 'Agent is not assigned to this campaign.'], 403);
+            }
+        }
+
+        $updated = DB::table('company_user')
+            ->where('company_id', $company->id)
+            ->where('user_id', $id)
+            ->update(['active_campaign_id' => $campaignId]);
+
+        if (!$updated) {
+            return response()->json(['message' => 'Agent is not a member of this company.'], 404);
+        }
+
+        return response()->json([
+            'ok' => true,
+            'agentId' => (string) $id,
+            'campaignId' => $campaignId ? (string) $campaignId : null,
+        ]);
+    }
+
     public function destroy($id)
     {
         if (!is_numeric($id)) {

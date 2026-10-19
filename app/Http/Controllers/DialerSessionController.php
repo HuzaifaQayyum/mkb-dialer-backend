@@ -64,7 +64,14 @@ class DialerSessionController extends Controller
                 'status' => $this->agentStatus($a, $call),
                 'contactName' => $call?->contact?->name,
                 'phone' => $call?->phone,
-                'callDurationSec' => $call?->bridged_at ? now()->diffInSeconds($call->bridged_at) : 0,
+                'callDurationSec' => $call?->bridged_at
+                    ? max(0, (int) $call->bridged_at->diffInSeconds(now()))
+                    : 0,
+                // Full lead on the live call, so the console can show who the
+                // agent is actually talking to rather than just a name.
+                'callId' => $call ? (string) $call->id : null,
+                'lead' => $call?->contact?->toLeadPayload(),
+                'thirdParty' => $call?->third_party_number,
             ];
         })->values();
 
@@ -102,7 +109,11 @@ class DialerSessionController extends Controller
         $validated = $request->validate([
             'name' => 'nullable|string|max:255',
             'concurrency' => 'nullable|integer|min:1|max:'.config('services.dialer.max_concurrency'),
-            'pacing_ratio' => 'nullable|numeric|min:0.5|max:3',
+            // Above ~1.5 this is blast dialing: more lines than agents, so
+            // some answered calls have nobody to go to and are abandoned.
+            // The ceiling is deliberately generous for testing; the
+            // abandoned counter on the dashboard is what to watch in anger.
+            'pacing_ratio' => 'nullable|numeric|min:0.5|max:20',
             'lead_tag' => 'nullable|string|max:255',
             'auto_close_at' => 'nullable|date',
         ]);
@@ -285,6 +296,41 @@ class DialerSessionController extends Controller
         ]);
     }
 
+    /**
+     * Stream a call recording.
+     *
+     * Asterisk writes into a host-mounted directory; we only ever join the
+     * stored basename onto it and reject anything with a path separator, so
+     * a crafted recording_name cannot walk out of that directory.
+     */
+    public function recording(int $id)
+    {
+        $attempt = CallAttempt::where('company_id', $this->companyId())->find($id);
+        if (! $attempt) {
+            return response()->json(['message' => 'Call not found.'], 404);
+        }
+        if (! $attempt->recording_name) {
+            return response()->json(['message' => 'This call has no recording.'], 404);
+        }
+
+        $name = basename($attempt->recording_name);
+        $format = preg_replace('/[^a-z0-9]/i', '', (string) ($attempt->recording_format ?: 'wav'));
+        $path = rtrim(config('services.asterisk.recording_path'), '/').'/'.$name.'.'.$format;
+
+        if (! is_file($path)) {
+            return response()->json([
+                'message' => 'Recording not found on disk yet.',
+                'expectedAt' => $path,
+                'status' => $attempt->recording_status,
+            ], 404);
+        }
+
+        return response()->file($path, [
+            'Content-Type' => $format === 'wav' ? 'audio/wav' : 'application/octet-stream',
+            'Content-Disposition' => 'inline; filename="'.$name.'.'.$format.'"',
+        ]);
+    }
+
     /** Recent call history for the bulk dashboard feed. */
     public function attempts(Request $request)
     {
@@ -307,6 +353,16 @@ class DialerSessionController extends Controller
                 'talkDuration' => $a->talk_duration,
                 'dialedAt' => $a->dialed_at?->toIso8601String(),
                 'endedAt' => $a->ended_at?->toIso8601String(),
+                'direction' => $a->direction,
+                'notes' => $a->notes,
+                'hasRecording' => (bool) $a->recording_name,
+                // Path, not an absolute URL: url() builds from APP_URL, which
+                // points at the deployed host and is wrong for whichever API
+                // base the client is actually talking to.
+                'recordingPath' => $a->recording_name
+                    ? "/dialer/attempts/{$a->id}/recording"
+                    : null,
+                'recordingStatus' => $a->recording_status,
             ]);
 
         return response()->json($attempts);

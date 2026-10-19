@@ -205,8 +205,13 @@ class DialerEngine
             if ($attempt->channel_id && in_array($attempt->channel_id, $active, true)) {
                 continue; // genuinely still up
             }
+            $status = $attempt->answered_at ? 'completed' : 'failed';
             $attempt->update([
-                'status' => $attempt->answered_at ? 'completed' : 'failed',
+                'status' => $status,
+                'disposition' => $attempt->disposition
+                    ?: ($attempt->bridged_at
+                        ? null
+                        : \App\Http\Controllers\CallEventController::autoDisposition($status)),
                 'hangup_cause' => $attempt->hangup_cause ?: 'reaped-stale',
                 'ended_at' => $attempt->ended_at ?: now(),
             ]);
@@ -216,7 +221,15 @@ class DialerEngine
         return $reaped;
     }
 
-    /** US-centric E.164 normalisation; returns null when unusable. */
+    /**
+     * Normalise to E.164, or return null when the number cannot be resolved
+     * unambiguously.
+     *
+     * Returning null is deliberate. A national-format number like 03009990002
+     * means nothing without a country: blindly prefixing "+" produces
+     * +03009990002, which every carrier rejects, and the failure surfaces
+     * later as a mystery dead call rather than a bad import.
+     */
     public function toE164(?string $raw): ?string
     {
         if (! $raw) {
@@ -228,16 +241,50 @@ class DialerEngine
             return null;
         }
 
+        // Already international.
         if (str_starts_with($raw, '+')) {
             return strlen($digits) >= 8 ? '+'.$digits : null;
         }
-        if (strlen($digits) === 10) {
-            return '+1'.$digits;
-        }
-        if (strlen($digits) === 11 && str_starts_with($digits, '1')) {
-            return '+'.$digits;
+        if (str_starts_with($digits, '00')) {
+            $rest = substr($digits, 2);
+            return strlen($rest) >= 8 ? '+'.$rest : null;
         }
 
-        return strlen($digits) >= 8 ? '+'.$digits : null;
+        $cc = trim((string) config('services.dialer.default_country_code', ''));
+
+        // National format (leading trunk zero): needs a configured country.
+        if (str_starts_with($digits, '0')) {
+            $national = ltrim($digits, '0');
+            return ($cc === '' || ! $this->plausibleNational($national))
+                ? null
+                : $this->e164($cc.$national);
+        }
+
+        // NANP conveniences, kept for US/Canada lists.
+        if (strlen($digits) === 10 && ($cc === '' || $cc === '1')) {
+            return $this->e164('1'.$digits);
+        }
+        if (strlen($digits) === 11 && str_starts_with($digits, '1')) {
+            return $this->e164($digits);
+        }
+
+        // Bare national number with a configured country code.
+        if ($cc !== '' && $this->plausibleNational($digits) && strlen($digits) <= 11) {
+            return $this->e164($cc.$digits);
+        }
+
+        return strlen($digits) >= 10 ? $this->e164($digits) : null;
+    }
+
+    /** A national subscriber number is never shorter than this. */
+    private function plausibleNational(string $digits): bool
+    {
+        return strlen($digits) >= 7;
+    }
+
+    /** E.164 allows at most 15 digits; anything else is a typo, not a number. */
+    private function e164(string $digits): ?string
+    {
+        return (strlen($digits) >= 8 && strlen($digits) <= 15) ? '+'.$digits : null;
     }
 }
